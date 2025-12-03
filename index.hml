@@ -1,0 +1,266 @@
+<!-- Lista de Tarefas Simples (HTML único) - salva/recupera via arquivo .txt (JSON lines) ou localStorage -->
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Lista de Tarefas Simples</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;background:#f7f8fb;margin:0;padding:20px}
+    .app{max-width:900px;margin:0 auto}
+    header{display:flex;align-items:center;justify-content:space-between}
+    h1{font-size:20px;margin:0}
+    .card{background:#fff;border-radius:8px;padding:12px;box-shadow:0 2px 8px rgba(0,0,0,.06);margin-top:12px}
+    .form-row{display:flex;gap:8px;flex-wrap:wrap}
+    input,textarea,select{padding:8px;border:1px solid #ccc;border-radius:6px;font-size:14px}
+    input[type=date]{padding:6px}
+    button{padding:8px 10px;border-radius:6px;border:none;cursor:pointer}
+    .btn-primary{background:#007bff;color:#fff}
+    .btn-danger{background:#dc3545;color:#fff}
+    .btn-link{background:transparent;color:#007bff;border:1px dashed transparent}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
+    .actions button{margin-right:6px}
+    .small{font-size:13px;color:#666}
+    .inline-input{width:100%}
+    @media(max-width:680px){.form-row{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Lista de Tarefas - Simples</h1>
+      <div class="small">Salva localmente + exporta/ importa .txt</div>
+    </header>
+
+    <div class="card">
+      <form id="formTarefa">
+        <input type="hidden" id="taskId">
+        <div class="form-row">
+          <input id="descricao" class="inline-input" placeholder="Descrição" required>
+          <input id="prazo" type="date" style="width:160px">
+          <select id="status">
+            <option value="pendente">Pendente</option>
+            <option value="em_andamento">Em andamento</option>
+            <option value="concluida">Concluída</option>
+          </select>
+          <button class="btn-primary" type="submit">Salvar</button>
+          <button type="button" id="btnLimpar" class="btn-link">Limpar</button>
+        </div>
+      </form>
+
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btnExport" class="btn-primary">Exportar para .txt</button>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+          <input id="fileImport" type="file" accept=".txt" style="display:none">
+          <span style="border:1px solid #ddd;padding:6px;border-radius:6px;">Importar .txt</span>
+        </label>
+        <button id="btnClearStorage" class="btn-danger">Limpar armazenamento</button>
+      </div>
+    </div>
+
+    <div class="card" id="listaCard">
+      <table id="tabela">
+        <thead>
+          <tr><th>ID</th><th>Descrição</th><th>Prazo</th><th>Status</th><th>Ações</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="semTarefas" class="small" style="padding:10px;display:none">Nenhuma tarefa encontrada.</div>
+    </div>
+  </div>
+
+<script>
+// formato interno: { id: number, descricao: string, prazo: 'YYYY-MM-DD' | '', status: 'pendente'|'em_andamento'|'concluida' }
+const LS_KEY = 'lista_tarefas_simples_v1';
+let tarefas = [];
+
+// DOM
+const tabelaBody = document.querySelector('#tabela tbody');
+const semTarefas = document.getElementById('semTarefas');
+const form = document.getElementById('formTarefa');
+const inputDesc = document.getElementById('descricao');
+const inputPrazo = document.getElementById('prazo');
+const inputStatus = document.getElementById('status');
+const inputTaskId = document.getElementById('taskId');
+const btnExport = document.getElementById('btnExport');
+const fileImport = document.getElementById('fileImport');
+const btnClearStorage = document.getElementById('btnClearStorage');
+const btnLimpar = document.getElementById('btnLimpar');
+
+// inicial
+loadFromStorage();
+renderTabela();
+
+form.addEventListener('submit', (e)=>{
+  e.preventDefault();
+  const id = inputTaskId.value ? Number(inputTaskId.value) : null;
+  const descricao = inputDesc.value.trim();
+  const prazo = inputPrazo.value || '';
+  const status = inputStatus.value;
+
+  if(!descricao){ alert('Descrição é obrigatória'); return; }
+
+  if(id){
+    // editar
+    const idx = tarefas.findIndex(t=>t.id===id);
+    if(idx>-1){
+      tarefas[idx].descricao = descricao;
+      tarefas[idx].prazo = prazo;
+      tarefas[idx].status = status;
+    }
+  }else{
+    // novo
+    const novo = { id: gerarId(), descricao, prazo, status };
+    tarefas.push(novo);
+  }
+
+  saveToStorage();
+  limparForm();
+  renderTabela();
+});
+
+btnLimpar.addEventListener('click', ()=>{ limparForm(); });
+
+btnExport.addEventListener('click', ()=>{
+  // export as JSON lines (.txt)
+  if(tarefas.length===0){ alert('Sem tarefas para exportar'); return; }
+  const lines = tarefas.map(t=>JSON.stringify(t)).join('\n');
+  const blob = new Blob([lines], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'tarefas.txt';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+fileImport.addEventListener('change', (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const text = reader.result.trim();
+      if(!text){ alert('Arquivo vazio'); return; }
+      const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+      const parsed = lines.map(l=>JSON.parse(l));
+      // simple validation
+      if(!Array.isArray(parsed)){ alert('Formato inválido'); return; }
+      // merge keeping unique ids (if conflict, replace)
+      const mapa = {};
+      tarefas.concat(parsed).forEach(t=>{ mapa[t.id] = t; });
+      tarefas = Object.values(mapa).sort((a,b)=>a.id-b.id);
+      saveToStorage();
+      renderTabela();
+      alert('Importação concluída');
+      fileImport.value = '';
+    }catch(err){
+      alert('Erro ao importar: ' + err.message);
+    }
+  };
+  reader.readAsText(f);
+});
+
+btnClearStorage.addEventListener('click', ()=>{
+  if(confirm('Limpar todas as tarefas do armazenamento local?')){
+    tarefas = [];
+    saveToStorage();
+    renderTabela();
+  }
+});
+
+function gerarId(){
+  const max = tarefas.reduce((m,t)=>t.id>m?t.id:m,0);
+  return max+1;
+}
+
+function editarTarefa(id){
+  const t = tarefas.find(x=>x.id===id);
+  if(!t) return;
+  inputTaskId.value = t.id;
+  inputDesc.value = t.descricao;
+  inputPrazo.value = t.prazo;
+  inputStatus.value = t.status;
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function excluirTarefa(id){
+  if(!confirm('Excluir tarefa ID '+id+'?')) return;
+  tarefas = tarefas.filter(t=>t.id!==id);
+  saveToStorage();
+  renderTabela();
+}
+
+function toggleStatus(id){
+  const t = tarefas.find(x=>x.id===id);
+  if(!t) return;
+  if(t.status==='concluida') t.status='pendente';
+  else t.status='concluida';
+  saveToStorage();
+  renderTabela();
+}
+
+function limparForm(){
+  inputTaskId.value=''; inputDesc.value=''; inputPrazo.value=''; inputStatus.value='pendente';
+}
+
+function renderTabela(){
+  tabelaBody.innerHTML = '';
+  if(tarefas.length===0){ semTarefas.style.display='block'; document.getElementById('tabela').style.display='none'; return; }
+  semTarefas.style.display='none'; document.getElementById('tabela').style.display='table';
+
+  tarefas.forEach(t=>{
+    const tr = document.createElement('tr');
+    const tdId = document.createElement('td'); tdId.textContent = t.id;
+    const tdDesc = document.createElement('td'); tdDesc.textContent = t.descricao;
+    const tdPrazo = document.createElement('td'); tdPrazo.textContent = t.prazo || '-';
+    const tdStatus = document.createElement('td'); tdStatus.textContent = formatStatus(t.status);
+    const tdAcoes = document.createElement('td'); tdAcoes.className='actions';
+
+    const btnEdit = document.createElement('button'); btnEdit.textContent='Editar'; btnEdit.className='btn-primary'; btnEdit.style.padding='6px'; btnEdit.onclick = ()=>editarTarefa(t.id);
+    const btnDelete = document.createElement('button'); btnDelete.textContent='Excluir'; btnDelete.className='btn-danger'; btnDelete.style.padding='6px'; btnDelete.onclick = ()=>excluirTarefa(t.id);
+    const btnToggle = document.createElement('button'); btnToggle.textContent='Toggle Concluído'; btnToggle.style.padding='6px'; btnToggle.onclick = ()=>toggleStatus(t.id);
+
+    tdAcoes.appendChild(btnEdit); tdAcoes.appendChild(btnDelete); tdAcoes.appendChild(btnToggle);
+
+    tr.appendChild(tdId); tr.appendChild(tdDesc); tr.appendChild(tdPrazo); tr.appendChild(tdStatus); tr.appendChild(tdAcoes);
+    tabelaBody.appendChild(tr);
+  });
+}
+
+function formatStatus(s){
+  if(s==='pendente') return 'Pendente';
+  if(s==='em_andamento') return 'Em andamento';
+  if(s==='concluida') return 'Concluída';
+  return s;
+}
+
+function saveToStorage(){
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(tarefas)); }
+  catch(e){ console.warn('Não foi possível salvar no localStorage', e); }
+}
+
+function loadFromStorage(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(raw){ tarefas = JSON.parse(raw); }
+    else{
+      // seed com exemplo
+      tarefas = [ {id:1,descricao:'Pagar boleto',prazo:'2025-12-05',status:'pendente'}, {id:2,descricao:'Reunião com cliente',prazo:'',status:'em_andamento'} ];
+    }
+  }catch(e){ tarefas = []; }
+}
+</script>
+</body>
+</html>
+
+
+
+<!-- Exemplo de arquivo tarefas.txt (formato usado pelo botão Exportar / Importar)
+Cada linha é um objeto JSON:
+{"id":1,"descricao":"Pagar boleto","prazo":"2025-12-05","status":"pendente"}
+{"id":2,"descricao":"Reunião","prazo":"","status":"em_andamento"}
+-->
